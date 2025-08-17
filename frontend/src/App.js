@@ -4,7 +4,7 @@ import Webcam from 'react-webcam';
 import './App.css';
 
 // This will be fetched from backend
-const REDIRECT_URI = 'http://localhost:3000/callback';
+const REDIRECT_URI = 'https://localhost:3000/callback';
 const SCOPES = 'user-read-private user-read-email user-modify-playback-state user-read-playback-state user-top-read streaming';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
@@ -45,28 +45,33 @@ const EmotionMusicApp = () => {
     const loadModels = async () => {
       try {
         setLoading(true);
+        setError(null);
         
         // Load the emotion detection model
         // Using face-api.js with emotion recognition
-        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@latest/model';
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
         
         await tf.ready();
         
         // Dynamically import face-api
         const faceapi = await import('@vladmandic/face-api');
         
-        await Promise.all([
+        // Load models with better error handling
+        const modelPromises = [
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
           faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-        ]);
+        ];
+        
+        await Promise.all(modelPromises);
         
         setModel(faceapi);
         setLoading(false);
+        console.log('Emotion detection models loaded successfully');
       } catch (error) {
         console.error('Error loading models:', error);
-        setError('Failed to load emotion detection models');
+        setError('Failed to load emotion detection models. Please refresh the page and try again.');
         setLoading(false);
       }
     };
@@ -217,10 +222,26 @@ const EmotionMusicApp = () => {
     return null;
   };
 
+  // Fallback emotion detection using manual selection
+  const manualEmotionSelection = (emotion) => {
+    setCurrentEmotion(emotion);
+    setEmotionConfidence(0.8);
+    setEmotionHistory(prev => [...prev.slice(-9), emotion]);
+    
+    if (autoPlay && accessToken) {
+      fetchAndPlayMusic(emotion);
+    }
+  };
+
   // Start continuous emotion detection
   const startEmotionDetection = useCallback(() => {
-    if (!model || !accessToken) {
-      setError('Please ensure camera access is granted and you are logged in to Spotify');
+    if (!accessToken) {
+      setError('Please log in to Spotify first');
+      return;
+    }
+    
+    if (!model) {
+      setError('Emotion detection models not loaded. You can still manually select emotions below.');
       return;
     }
     
@@ -257,7 +278,7 @@ const EmotionMusicApp = () => {
       .catch(err => {
         console.error('Camera permission denied:', err);
         setCameraPermission(false);
-        setError('Camera access is required for emotion detection. Please grant camera permission and refresh.');
+        setError('Camera access is required for emotion detection. You can still manually select emotions below.');
       });
   }, [model, accessToken, currentEmotion, autoPlay]);
 
@@ -639,7 +660,7 @@ const EmotionMusicApp = () => {
               {['happy', 'sad', 'angry', 'relaxed', 'surprised', 'neutral'].map(emotion => (
                 <button
                   key={emotion}
-                  onClick={() => fetchAndPlayMusic(emotion)}
+                  onClick={() => manualEmotionSelection(emotion)}
                   className="emotion-select-btn"
                   style={{ background: getEmotionColor(emotion) }}
                   disabled={loading}
