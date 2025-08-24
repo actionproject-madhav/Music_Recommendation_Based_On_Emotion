@@ -31,7 +31,31 @@ const EmotionMusicApp = () => {
   const webcamRef = useRef(null);
   const detectionIntervalRef = useRef(null);
   const canvasRef = useRef(null);
-
+  const exchangeCodeForToken = async (code) => {
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_URL}/api/spotify/exchange-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setAccessToken(data.access_token);
+        localStorage.setItem('spotify_token', data.access_token);
+        fetchUserProfile(data.access_token);
+        fetchDevices(data.access_token);
+      } else {
+        setError('Failed to exchange authorization code for token');
+      }
+    } catch (error) {
+      console.error('Error exchanging code:', error);
+      setError('Failed to authenticate with Spotify');
+    } finally {
+      setLoading(false);
+    }
+  };
   // Fetch client ID from backend
   useEffect(() => {
     fetch(`${API_URL}/api/spotify/client-id`)
@@ -79,29 +103,32 @@ const EmotionMusicApp = () => {
     loadModels();
   }, []);
 
-  // Handle Spotify authentication
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (hash) {
-      const params = new URLSearchParams(hash.substring(1));
-      const token = params.get('access_token');
-      if (token) {
-        setAccessToken(token);
-        window.location.hash = '';
-        localStorage.setItem('spotify_token', token);
-        fetchUserProfile(token);
-        fetchDevices(token);
-      }
-    } else {
-      // Check for stored token
-      const storedToken = localStorage.getItem('spotify_token');
-      if (storedToken) {
-        setAccessToken(storedToken);
-        fetchUserProfile(storedToken);
-        fetchDevices(storedToken);
-      }
+ // Handle Spotify authentication
+useEffect(() => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  const error = urlParams.get('error');
+  
+  if (error) {
+    setError(`Spotify authentication error: ${error}`);
+    return;
+  }
+  
+  if (code) {
+    // Exchange code for access token via backend
+    exchangeCodeForToken(code);
+    // Clean up URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } else {
+    // Check for stored token
+    const storedToken = localStorage.getItem('spotify_token');
+    if (storedToken) {
+      setAccessToken(storedToken);
+      fetchUserProfile(storedToken);
+      fetchDevices(storedToken);
     }
-  }, []);
+  }
+}, []);
 
   const fetchUserProfile = async (token) => {
     try {
@@ -146,19 +173,8 @@ const EmotionMusicApp = () => {
       return;
     }
     
-    console.log('=== SPOTIFY LOGIN DEBUG ===');
-    console.log('Client ID:', clientId);
-    console.log('Redirect URI:', REDIRECT_URI);
-    console.log('Scopes:', SCOPES);
-    
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}&show_dialog=true`;
-    
-    console.log('Full Auth URL:', authUrl);
-    console.log('Encoded Redirect URI:', encodeURIComponent(REDIRECT_URI));
-    console.log('Encoded Scopes:', encodeURIComponent(SCOPES));
-    console.log('========================');
-    
-    setError(null);
+    // Use Authorization Code flow instead of Implicit flow
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}&show_dialog=true`;
     window.location.href = authUrl;
   };
 
