@@ -9,7 +9,7 @@ import logging
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'https://localhost:3000', 'http://localhost:3001', 'https://localhost:3001'])
+CORS(app, origins=['http://localhost:3000', 'https://localhost:3000', 'http://localhost:3001', 'https://localhost:3001', 'http://127.0.0.1:3000'])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Spotify credentials - users will use their own
 CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
-REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://localhost:3000/callback')
-
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://127.0.0.1:3000/callback')
 # Emotion to music characteristics mapping (Spotify audio features)
 EMOTION_FEATURES = {
     'happy': {
@@ -93,6 +92,8 @@ def get_recommendations():
     emotion = data.get('emotion', 'neutral').lower()
     access_token = data.get('access_token')
     
+    print(f"Getting recommendations for emotion: {emotion}")  # Debug
+    
     if not access_token:
         return jsonify({'error': 'No access token provided'}), 401
     
@@ -101,7 +102,14 @@ def get_recommendations():
     }
     
     try:
+        # Test if token is valid
+        test_response = requests.get('https://api.spotify.com/v1/me', headers=headers)
+        if test_response.status_code != 200:
+            print(f"Token validation failed: {test_response.status_code}")
+            return jsonify({'error': 'Invalid access token'}), 401
+        
         # Get user's top tracks for seed
+        print("Getting user's top tracks...")
         top_tracks_url = 'https://api.spotify.com/v1/me/top/tracks'
         top_tracks_response = requests.get(
             top_tracks_url, 
@@ -114,14 +122,20 @@ def get_recommendations():
         
         if top_tracks_response.status_code == 200:
             top_tracks = top_tracks_response.json()
+            print(f"Found {len(top_tracks.get('items', []))} top tracks")
+            
             # Get up to 2 seed tracks
             for track in top_tracks.get('items', [])[:2]:
-                seed_tracks.append(track['id'])
-                if track['artists']:
-                    seed_artists.append(track['artists'][0]['id'])
+                if track and 'id' in track:
+                    seed_tracks.append(track['id'])
+                    if track.get('artists') and len(track['artists']) > 0:
+                        seed_artists.append(track['artists'][0]['id'])
+        else:
+            print(f"Failed to get top tracks: {top_tracks_response.status_code}")
         
-        # Get user's top artists for better personalization
+        # Get user's top artists if we need more seeds
         if len(seed_artists) < 2:
+            print("Getting user's top artists...")
             top_artists_url = 'https://api.spotify.com/v1/me/top/artists'
             top_artists_response = requests.get(
                 top_artists_url,
@@ -132,7 +146,7 @@ def get_recommendations():
             if top_artists_response.status_code == 200:
                 top_artists = top_artists_response.json()
                 for artist in top_artists.get('items', [])[:2]:
-                    if artist['id'] not in seed_artists:
+                    if artist and 'id' in artist and artist['id'] not in seed_artists:
                         seed_artists.append(artist['id'])
         
         # Get emotion-based music features
@@ -152,6 +166,7 @@ def get_recommendations():
         
         # If no seeds from user history, use genre seeds
         if not seed_tracks and not seed_artists:
+            print("No user seeds found, using genre seeds")
             rec_params['seed_genres'] = ','.join(features['genres'][:2])
         
         # Add audio features for emotion
@@ -168,9 +183,13 @@ def get_recommendations():
         if 'target_acousticness' in features:
             rec_params['target_acousticness'] = features['target_acousticness']
         
+        print(f"Recommendation params: {rec_params}")
+        
         # Get recommendations from Spotify
         recommendations_url = 'https://api.spotify.com/v1/recommendations'
         rec_response = requests.get(recommendations_url, headers=headers, params=rec_params)
+        
+        print(f"Recommendations response status: {rec_response.status_code}")
         
         if rec_response.status_code == 200:
             recommendations = rec_response.json()
@@ -182,90 +201,190 @@ def get_recommendations():
                 track_uris = []
                 
                 for track in tracks[:10]:  # Limit to 10 tracks
-                    track_info = {
-                        'id': track['id'],
-                        'name': track['name'],
-                        'artist': track['artists'][0]['name'] if track['artists'] else 'Unknown',
-                        'uri': track['uri'],
-                        'preview_url': track.get('preview_url'),
-                        'image': track['album']['images'][0]['url'] if track['album']['images'] else None
-                    }
-                    track_list.append(track_info)
-                    track_uris.append(track['uri'])
+                    if track and 'id' in track:
+                        track_info = {
+                            'id': track['id'],
+                            'name': track.get('name', 'Unknown'),
+                            'artist': track['artists'][0]['name'] if track.get('artists') and len(track['artists']) > 0 else 'Unknown',
+                            'uri': track.get('uri', ''),
+                            'preview_url': track.get('preview_url'),
+                            'image': track.get('album', {}).get('images', [{}])[0].get('url') if track.get('album', {}).get('images') else None
+                        }
+                        track_list.append(track_info)
+                        track_uris.append(track['uri'])
                 
-                return jsonify({
-                    'emotion': emotion,
-                    'tracks': track_list,
-                    'track_uris': track_uris,
-                    'features_used': features,
-                    'playlist_name': f"{emotion.capitalize()} Mood - Personalized"
-                }), 200
+                if track_list:
+                    return jsonify({
+                        'emotion': emotion,
+                        'tracks': track_list,
+                        'track_uris': track_uris,
+                        'features_used': features,
+                        'playlist_name': f"{emotion.capitalize()} Mood - Personalized"
+                    }), 200
+        else:
+            print(f"Recommendations failed: {rec_response.status_code} - {rec_response.text}")
         
         # Fallback: Search for playlists if recommendations fail
+        print("Falling back to playlist search...")
         return search_mood_playlists(emotion, headers)
         
     except Exception as e:
         logger.error(f"Error getting recommendations: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # Fallback to playlist search
         return search_mood_playlists(emotion, headers)
-
 def search_mood_playlists(emotion, headers):
     """Fallback: Search for mood-based playlists"""
     try:
         features = EMOTION_FEATURES.get(emotion, EMOTION_FEATURES['neutral'])
-        search_query = f"{emotion} mood {features['moods'][0]}"
+        search_query = f"{emotion} mood"
         
         search_url = 'https://api.spotify.com/v1/search'
         search_params = {
             'q': search_query,
             'type': 'playlist',
-            'limit': 5
+            'limit': 10  # Increased limit to have more options
         }
+        
+        print(f"Searching for playlists with query: {search_query}")  # Debug
         
         search_response = requests.get(search_url, headers=headers, params=search_params)
         
+        print(f"Search response status: {search_response.status_code}")  # Debug
+        
         if search_response.status_code == 200:
             results = search_response.json()
-            playlists = results.get('playlists', {}).get('items', [])
+            print(f"Search results keys: {results.keys()}")  # Debug
             
-            if playlists:
-                # Get tracks from the first playlist
-                playlist = playlists[0]
-                tracks_url = f"https://api.spotify.com/v1/playlists/{playlist['id']}/tracks"
-                tracks_response = requests.get(tracks_url, headers=headers, params={'limit': 10})
+            # Add null checks here
+            if 'playlists' not in results or results['playlists'] is None:
+                print("No playlists key in response or playlists is None")
+                return jsonify({'error': 'No playlists found for this mood'}), 404
                 
-                if tracks_response.status_code == 200:
-                    playlist_tracks = tracks_response.json()
-                    tracks = []
-                    track_uris = []
+            playlists = results['playlists'].get('items', [])
+            print(f"Found {len(playlists)} playlists")  # Debug
+            
+            if not playlists:
+                print("No playlist items found")
+                return jsonify({'error': 'No playlists found for this mood'}), 404
+            
+            # Filter out None playlists and find a valid one
+            valid_playlist = None
+            for playlist in playlists:
+                if playlist is not None and isinstance(playlist, dict) and 'id' in playlist:
+                    # Additional checks for playlist validity
+                    playlist_id = playlist.get('id')
+                    playlist_name = playlist.get('name', 'Unknown')
                     
-                    for item in playlist_tracks.get('items', [])[:10]:
-                        if item['track']:
-                            track = item['track']
-                            track_info = {
-                                'id': track['id'],
-                                'name': track['name'],
-                                'artist': track['artists'][0]['name'] if track['artists'] else 'Unknown',
-                                'uri': track['uri'],
-                                'preview_url': track.get('preview_url'),
-                                'image': track['album']['images'][0]['url'] if track['album']['images'] else None
-                            }
-                            tracks.append(track_info)
-                            track_uris.append(track['uri'])
+                    if playlist_id and playlist_name:
+                        print(f"Found valid playlist: {playlist_name} (ID: {playlist_id})")
+                        valid_playlist = playlist
+                        break
+                else:
+                    print(f"Skipping invalid playlist: {playlist}")
+            
+            if not valid_playlist:
+                print("No valid playlists found")
+                return jsonify({'error': 'No valid playlists found for this mood'}), 404
+            
+            print(f"Using playlist: {valid_playlist.get('name', 'Unknown')}")  # Debug
+            
+            # Get tracks from the valid playlist
+            tracks_url = f"https://api.spotify.com/v1/playlists/{valid_playlist['id']}/tracks"
+            tracks_response = requests.get(tracks_url, headers=headers, params={'limit': 20})
+            
+            print(f"Tracks response status: {tracks_response.status_code}")  # Debug
+            
+            if tracks_response.status_code == 200:
+                playlist_tracks = tracks_response.json()
+                
+                if 'items' not in playlist_tracks or playlist_tracks['items'] is None:
+                    print("No items in playlist tracks response")
+                    return jsonify({'error': 'Playlist has no tracks'}), 404
+                
+                tracks = []
+                track_uris = []
+                
+                for item in playlist_tracks.get('items', []):
+                    # Multiple null checks for each item
+                    if (item is None or 
+                        'track' not in item or 
+                        item['track'] is None or
+                        not isinstance(item['track'], dict)):
+                        continue
+                        
+                    track = item['track']
                     
+                    # Check if track has required fields
+                    if (not track.get('id') or 
+                        not track.get('name') or 
+                        not track.get('uri')):
+                        continue
+                    
+                    # Get artist name safely
+                    artist_name = 'Unknown'
+                    if (track.get('artists') and 
+                        isinstance(track['artists'], list) and 
+                        len(track['artists']) > 0 and
+                        track['artists'][0] is not None and
+                        isinstance(track['artists'][0], dict)):
+                        artist_name = track['artists'][0].get('name', 'Unknown')
+                    
+                    # Get album image safely
+                    image_url = None
+                    if (track.get('album') and 
+                        isinstance(track['album'], dict) and
+                        track['album'].get('images') and
+                        isinstance(track['album']['images'], list) and
+                        len(track['album']['images']) > 0 and
+                        track['album']['images'][0] is not None and
+                        isinstance(track['album']['images'][0], dict)):
+                        image_url = track['album']['images'][0].get('url')
+                    
+                    track_info = {
+                        'id': track['id'],
+                        'name': track['name'],
+                        'artist': artist_name,
+                        'uri': track['uri'],
+                        'preview_url': track.get('preview_url'),
+                        'image': image_url
+                    }
+                    
+                    tracks.append(track_info)
+                    track_uris.append(track['uri'])
+                    
+                    # Stop after getting 10 valid tracks
+                    if len(tracks) >= 10:
+                        break
+                
+                if tracks:
+                    print(f"Successfully found {len(tracks)} valid tracks")
                     return jsonify({
                         'emotion': emotion,
                         'tracks': tracks,
                         'track_uris': track_uris,
-                        'playlist_name': playlist['name'],
+                        'playlist_name': valid_playlist.get('name', f"{emotion.capitalize()} Mood"),
                         'source': 'playlist_search'
                     }), 200
-        
-        return jsonify({'error': 'Could not find music for this mood'}), 404
+                else:
+                    print("No valid tracks found in playlist")
+                    return jsonify({'error': 'No playable tracks found in playlist'}), 404
+            else:
+                print(f"Failed to get playlist tracks: {tracks_response.status_code}")
+                print(f"Tracks response text: {tracks_response.text}")
+                return jsonify({'error': 'Failed to get playlist tracks'}), 500
+        else:
+            print(f"Search failed with status: {search_response.status_code}")
+            print(f"Search response: {search_response.text}")
+            return jsonify({'error': 'Failed to search for playlists'}), 500
         
     except Exception as e:
-        logger.error(f"Error searching playlists: {str(e)}")
+        print(f"Exception in search_mood_playlists: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': 'Failed to search for music'}), 500
+
 
 @app.route('/api/spotify/play', methods=['POST'])
 def play_tracks():
@@ -326,7 +445,39 @@ def play_tracks():
     except Exception as e:
         logger.error(f"Error starting playback: {str(e)}")
         return jsonify({'error': 'Failed to start playback'}), 500
-
+@app.route('/api/spotify/exchange-token', methods=['POST'])
+def exchange_token():
+    """Exchange authorization code for access token"""
+    data = request.json
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({'error': 'No authorization code provided'}), 400
+    
+    # Token exchange request
+    token_url = 'https://accounts.spotify.com/api/token'
+    token_data = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': REDIRECT_URI,
+        'client_id': CLIENT_ID,
+        'client_secret': os.getenv('SPOTIFY_CLIENT_SECRET')
+    }
+    
+    token_headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    
+    try:
+        response = requests.post(token_url, data=token_data, headers=token_headers)
+        
+        if response.status_code == 200:
+            return jsonify(response.json()), 200
+        else:
+            logger.error(f"Token exchange failed: {response.text}")
+            return jsonify({'error': 'Failed to exchange code for token'}), 400
+            
+    except Exception as e:
+        logger.error(f"Error exchanging token: {str(e)}")
+        return jsonify({'error': 'Token exchange failed'}), 500
 @app.route('/api/spotify/devices', methods=['GET'])
 def get_devices():
     """Get user's available Spotify devices"""
