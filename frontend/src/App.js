@@ -4,7 +4,7 @@ import Webcam from 'react-webcam';
 import './App.css';
 
 // This will be fetched from backend
-const REDIRECT_URI = 'https://localhost:3000/callback';
+const REDIRECT_URI = 'http://127.0.0.1:3000/callback';
 const SCOPES = 'user-read-private user-read-email user-modify-playback-state user-read-playback-state user-top-read streaming';
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
@@ -146,7 +146,19 @@ const EmotionMusicApp = () => {
       return;
     }
     
+    console.log('=== SPOTIFY LOGIN DEBUG ===');
+    console.log('Client ID:', clientId);
+    console.log('Redirect URI:', REDIRECT_URI);
+    console.log('Scopes:', SCOPES);
+    
     const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPES)}&show_dialog=true`;
+    
+    console.log('Full Auth URL:', authUrl);
+    console.log('Encoded Redirect URI:', encodeURIComponent(REDIRECT_URI));
+    console.log('Encoded Scopes:', encodeURIComponent(SCOPES));
+    console.log('========================');
+    
+    setError(null);
     window.location.href = authUrl;
   };
 

@@ -9,7 +9,7 @@ import logging
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=['http://localhost:3000', 'http://localhost:3001'])
+CORS(app, origins=['http://localhost:3000', 'https://localhost:3000', 'http://localhost:3001', 'https://localhost:3001'])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Spotify credentials - users will use their own
 CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
-REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://localhost:3000/callback')
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://localhost:3000/callback')
 
 # Emotion to music characteristics mapping (Spotify audio features)
 EMOTION_FEATURES = {
